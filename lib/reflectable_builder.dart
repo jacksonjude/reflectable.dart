@@ -5,6 +5,8 @@
 library reflectable.reflectable_builder;
 
 import 'dart:async';
+import 'package:analyzer/dart/analysis/results.dart';
+import 'package:analyzer/dart/element/element.dart';
 import 'package:build/build.dart';
 import 'package:build_config/build_config.dart';
 import 'package:build_runner_core/build_runner_core.dart';
@@ -22,8 +24,20 @@ class ReflectableBuilder implements Builder {
     var inputId = buildStep.inputId;
     var outputId = inputId.changeExtension('.reflectable.dart');
     var visibleLibraries = await resolver.libraries.toList();
+    var session = inputLibrary.session;
+    var resolvedLibraries = <LibraryElement, ResolvedLibraryResult>{};
+    for (var library in visibleLibraries) {
+      resolvedLibraries[library] =
+          await session.getResolvedLibraryByElement(library);
+    }
     var generatedSource = await BuilderImplementation().buildMirrorLibrary(
-        resolver, inputId, outputId, inputLibrary, visibleLibraries, true, []);
+        resolver,
+        inputId,
+        outputId,
+        inputLibrary,
+        visibleLibraries,
+        resolvedLibraries,
+        true, []);
     await buildStep.writeAsString(outputId, generatedSource);
   }
 

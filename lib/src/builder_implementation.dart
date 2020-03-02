@@ -593,6 +593,7 @@ class _ReflectorDomain {
   final Resolver _resolver;
   final AssetId _generatedLibraryId;
   final ClassElement _reflector;
+  final Map<LibraryElement, ResolvedLibraryResult> _resolvedLibraries;
 
   /// Do not use this, use [classes] which ensures that closure operations
   /// have been performed as requested in [_capabilities]. Exception: In
@@ -629,8 +630,8 @@ class _ReflectorDomain {
       }
       if (_capabilities._impliesTypes &&
           _capabilities._impliesTypeAnnotations) {
-        _AnnotationClassFixedPoint fix = _AnnotationClassFixedPoint(
-            _resolver, _generatedLibraryId, _classes.domainOf);
+        _AnnotationClassFixedPoint fix = _AnnotationClassFixedPoint(_resolver,
+            _resolvedLibraries, _generatedLibraryId, _classes.domainOf);
         if (_capabilities._impliesTypeAnnotationClosure) {
           await fix.expand(_classes);
         } else {
@@ -647,7 +648,7 @@ class _ReflectorDomain {
   final _Capabilities _capabilities;
 
   _ReflectorDomain(this._resolver, this._generatedLibraryId, this._reflector,
-      this._capabilities) {
+      this._capabilities, this._resolvedLibraries) {
     _classes = ClassElementEnhancedSet(this);
   }
 
@@ -821,7 +822,7 @@ class _ReflectorDomain {
     /// that it is importable and registering it with [importCollector].
     Future<void> addLibrary(LibraryElement library) async {
       if (!await _isImportableLibrary(
-          library, _generatedLibraryId, _resolver)) {
+          library, _generatedLibraryId, _resolver, _resolvedLibraries)) {
         return;
       }
       importCollector._addLibrary(library);
@@ -1480,8 +1481,8 @@ class _ReflectorDomain {
 
     String classMetadataCode;
     if (_capabilities._supportsMetadata) {
-      classMetadataCode = await _extractMetadataCode(
-          classElement, _resolver, importCollector, _generatedLibraryId);
+      classMetadataCode = await _extractMetadataCode(classElement, _resolver,
+          _resolvedLibraries, importCollector, _generatedLibraryId);
     } else {
       classMetadataCode = 'null';
     }
@@ -1529,7 +1530,8 @@ class _ReflectorDomain {
           classElement.isAbstract ||
           (classElement is MixinApplication &&
               !classElement.isMixinApplication) ||
-          !await _isImportable(classElement, _generatedLibraryId, _resolver)) {
+          !await _isImportable(classElement, _generatedLibraryId, _resolver,
+              _resolvedLibraries)) {
         // Note that this location is dead code until we get support for
         // anonymous mixin applications using type arguments as generic
         // classes (currently, no classes will pass the tests above). See
@@ -1550,7 +1552,8 @@ class _ReflectorDomain {
             if (subtype.isPrivate ||
                 subtype.isAbstract ||
                 (subtype is MixinApplication && !subtype.isMixinApplication) ||
-                !await _isImportable(subtype, _generatedLibraryId, _resolver)) {
+                !await _isImportable(subtype, _generatedLibraryId, _resolver,
+                    _resolvedLibraries)) {
               await helper(list, subtype);
             } else {
               String prefix = importCollector._getPrefix(subtype.library);
@@ -1660,8 +1663,8 @@ class _ReflectorDomain {
             typedefs);
       }
       String metadataCode = _capabilities._supportsMetadata
-          ? await _extractMetadataCode(
-              element, _resolver, importCollector, _generatedLibraryId)
+          ? await _extractMetadataCode(element, _resolver, _resolvedLibraries,
+              importCollector, _generatedLibraryId)
           : null;
       return "r.MethodMirrorImpl(r'${element.name}', $descriptor, "
           '$ownerIndex, $returnTypeIndex, $reflectedReturnTypeIndex, '
@@ -1701,8 +1704,8 @@ class _ReflectorDomain {
     }
     String metadataCode;
     if (_capabilities._supportsMetadata) {
-      metadataCode = await _extractMetadataCode(
-          element, _resolver, importCollector, _generatedLibraryId);
+      metadataCode = await _extractMetadataCode(element, _resolver,
+          _resolvedLibraries, importCollector, _generatedLibraryId);
     } else {
       // We encode 'without capability' as `null` for metadata, because
       // it is a `List<Object>`, which has no other natural encoding.
@@ -1744,8 +1747,8 @@ class _ReflectorDomain {
     }
     String metadataCode;
     if (_capabilities._supportsMetadata) {
-      metadataCode = await _extractMetadataCode(
-          element, _resolver, importCollector, _generatedLibraryId);
+      metadataCode = await _extractMetadataCode(element, _resolver,
+          _resolvedLibraries, importCollector, _generatedLibraryId);
     } else {
       // We encode 'without capability' as `null` for metadata, because
       // it is a `List<Object>`, which has no other natural encoding.
@@ -1909,7 +1912,8 @@ class _ReflectorDomain {
           'Attempt to generate code for an '
           'unsupported kind of type: $dartType (${dartType.runtimeType}). '
           'Generating `dynamic`.',
-          dartType.element));
+          dartType.element,
+          _resolvedLibraries));
       return 'dynamic';
     }
 
@@ -2087,7 +2091,8 @@ class _ReflectorDomain {
           'Attempt to generate code for an '
           'unsupported kind of type: $dartType (${dartType.runtimeType}). '
           'Generating `dynamic`.',
-          dartType.element));
+          dartType.element,
+          _resolvedLibraries));
       return 'dynamic';
     }
   }
@@ -2186,8 +2191,8 @@ class _ReflectorDomain {
 
     String metadataCode;
     if (_capabilities._supportsMetadata) {
-      metadataCode = await _extractMetadataCode(
-          library, _resolver, importCollector, _generatedLibraryId);
+      metadataCode = await _extractMetadataCode(library, _resolver,
+          _resolvedLibraries, importCollector, _generatedLibraryId);
     } else {
       metadataCode = 'null';
     }
@@ -2263,8 +2268,7 @@ class _ReflectorDomain {
       if (_isPlatformLibrary(element.library)) {
         metadataCode = 'const []';
       } else {
-        var resolvedLibrary =
-            await element.session.getResolvedLibraryByElement(element.library);
+        var resolvedLibrary = _resolvedLibraries[element.library];
         var declaration = resolvedLibrary.getElementDeclaration(element);
         // The declaration may be null because the element is synthetic, and
         // then it has no metadata.
@@ -2272,8 +2276,8 @@ class _ReflectorDomain {
         if (node == null) {
           metadataCode = 'const []';
         } else {
-          metadataCode = await _extractMetadataCode(
-              element, _resolver, importCollector, _generatedLibraryId);
+          metadataCode = await _extractMetadataCode(element, _resolver,
+              _resolvedLibraries, importCollector, _generatedLibraryId);
         }
       }
     }
@@ -2298,8 +2302,7 @@ class _ReflectorDomain {
     // TODO(eernst): 'dart:*' is not considered valid. To survive, we return
     // '' for all declarations from there. Issue 173.
     if (_isPlatformLibrary(parameterElement.library)) return '';
-    var resolvedLibrary = await parameterElement.session
-        .getResolvedLibraryByElement(parameterElement.library);
+    var resolvedLibrary = _resolvedLibraries[parameterElement.library];
     var declaration = resolvedLibrary.getElementDeclaration(parameterElement);
     // The declaration can be null because the declaration is synthetic, e.g.,
     // the parameter of an induced setter; they have no default value.
@@ -2308,12 +2311,12 @@ class _ReflectorDomain {
     if (parameterNode is DefaultFormalParameter &&
         parameterNode.defaultValue != null) {
       return await _extractConstantCode(parameterNode.defaultValue,
-          importCollector, _generatedLibraryId, _resolver);
+          importCollector, _generatedLibraryId, _resolver, _resolvedLibraries);
     } else if (parameterElement is DefaultFieldFormalParameterElementImpl) {
       Expression defaultValue = parameterElement.constantInitializer;
       if (defaultValue != null) {
-        return await _extractConstantCode(
-            defaultValue, importCollector, _generatedLibraryId, _resolver);
+        return await _extractConstantCode(defaultValue, importCollector,
+            _generatedLibraryId, _resolver, _resolvedLibraries);
       }
     }
     return '';
@@ -2480,17 +2483,19 @@ typedef ElementToDomain = _ClassDomain Function(ClassElement);
 /// generated code will be stored; it is used in the same check.
 class _AnnotationClassFixedPoint extends FixedPoint<ClassElement> {
   final Resolver resolver;
+  final Map<LibraryElement, ResolvedLibraryResult> resolvedLibraries;
   final AssetId generatedLibraryId;
   final ElementToDomain elementToDomain;
 
-  _AnnotationClassFixedPoint(
-      this.resolver, this.generatedLibraryId, this.elementToDomain);
+  _AnnotationClassFixedPoint(this.resolver, this.resolvedLibraries,
+      this.generatedLibraryId, this.elementToDomain);
 
   /// Returns the classes that occur as return types of covered methods or in
   /// type annotations of covered variables and parameters of covered methods,
   @override
   Future<Iterable<ClassElement>> successors(ClassElement classElement) async {
-    if (!await _isImportable(classElement, generatedLibraryId, resolver)) {
+    if (!await _isImportable(
+        classElement, generatedLibraryId, resolver, resolvedLibraries)) {
       return [];
     }
     _ClassDomain classDomain = elementToDomain(classElement);
@@ -3279,6 +3284,7 @@ int _processedEntryPointCount = 0;
 class BuilderImplementation {
   Resolver _resolver;
   var _libraries = <LibraryElement>[];
+  Map<LibraryElement, ResolvedLibraryResult> _resolvedLibraries;
   final _librariesByName = <String, LibraryElement>{};
   bool _formatted;
   List<WarningKind> _suppressedWarnings;
@@ -3440,7 +3446,8 @@ class BuilderImplementation {
   Future<void> _warn(WarningKind kind, String message, [Element target]) async {
     if (_warningEnabled(kind)) {
       if (target != null) {
-        log.warning(await _formatDiagnosticMessage(message, target));
+        log.warning(await _formatDiagnosticMessage(
+            message, target, _resolvedLibraries));
       } else {
         log.warning(message);
       }
@@ -3610,8 +3617,7 @@ class BuilderImplementation {
       return false;
     }
 
-    final resolvedLibrary = await constructor.session
-        .getResolvedLibraryByElement(constructor.library);
+    final resolvedLibrary = _resolvedLibraries[constructor.library];
     final declaration = resolvedLibrary.getElementDeclaration(constructor);
     if (declaration == null) return false;
     ConstructorDeclaration constructorDeclarationNode = declaration.node;
@@ -3674,9 +3680,11 @@ class BuilderImplementation {
         LibraryElement reflectorLibrary = reflector.library;
         _Capabilities capabilities =
             await _capabilitiesOf(capabilityLibrary, reflector);
-        assert(await _isImportableLibrary(reflectorLibrary, dataId, _resolver));
+        assert(await _isImportableLibrary(
+            reflectorLibrary, dataId, _resolver, _resolvedLibraries));
         importCollector._addLibrary(reflectorLibrary);
-        domain = _ReflectorDomain(_resolver, dataId, reflector, capabilities);
+        domain = _ReflectorDomain(
+            _resolver, dataId, reflector, capabilities, _resolvedLibraries);
         domains[reflector] = domain;
       }
       return domain;
@@ -3687,7 +3695,8 @@ class BuilderImplementation {
         LibraryElement library, ClassElement reflector) async {
       _ReflectorDomain domain = await getReflectorDomain(reflector);
       if (domain._capabilities._supportsLibraries) {
-        assert(await _isImportableLibrary(library, dataId, _resolver));
+        assert(await _isImportableLibrary(
+            library, dataId, _resolver, _resolvedLibraries));
         importCollector._addLibrary(library);
         domain._libraries.add(library);
       }
@@ -3698,7 +3707,7 @@ class BuilderImplementation {
     /// supported libraries.
     Future<void> addClassDomain(
         ClassElement type, ClassElement reflector) async {
-      if (!await _isImportable(type, dataId, _resolver)) {
+      if (!await _isImportable(type, dataId, _resolver, _resolvedLibraries)) {
         await _fine('Ignoring unrepresentable class ${type.name}', type);
       } else {
         _ReflectorDomain domain = await getReflectorDomain(reflector);
@@ -3786,7 +3795,8 @@ class BuilderImplementation {
     for (LibraryElement library in _libraries) {
       for (ClassElement reflector
           in await getReflectors(library.name, library.metadata)) {
-        assert(await _isImportableLibrary(library, dataId, _resolver));
+        assert(await _isImportableLibrary(
+            library, dataId, _resolver, _resolvedLibraries));
         await addLibrary(library, reflector);
       }
 
@@ -4034,8 +4044,7 @@ class BuilderImplementation {
       return _Capabilities(<ec.ReflectCapability>[]);
     }
 
-    final resolvedLibrary = await constructorElement.session
-        .getResolvedLibraryByElement(constructorElement.library);
+    final resolvedLibrary = _resolvedLibraries[constructorElement.library];
     final declaration =
         resolvedLibrary.getElementDeclaration(constructorElement);
     ConstructorDeclaration constructorDeclarationNode = declaration.node;
@@ -4110,7 +4119,8 @@ class BuilderImplementation {
     for (LibraryElement library in world.importCollector._libraries) {
       Uri uri = library == world.entryPointLibrary
           ? Uri.parse(originalEntryPointFilename)
-          : await _getImportUri(library, generatedLibraryId);
+          : await _getImportUri(
+              library, generatedLibraryId, _resolvedLibraries);
       String prefix = world.importCollector._getPrefix(library);
       if (prefix.isNotEmpty) {
         imports
@@ -4162,6 +4172,7 @@ void initializeReflectable() {
       AssetId generatedLibraryId,
       LibraryElement inputLibrary,
       List<LibraryElement> visibleLibraries,
+      Map<LibraryElement, ResolvedLibraryResult> resolvedLibraries,
       bool formatted,
       List<WarningKind> suppressedWarnings) async {
     _formatted = formatted;
@@ -4170,6 +4181,7 @@ void initializeReflectable() {
     // The [_resolver] provides all the static information.
     _resolver = resolver;
     _libraries = visibleLibraries;
+    _resolvedLibraries = resolvedLibraries;
 
     for (LibraryElement library in _libraries) {
       if (library.name != null) _librariesByName[library.name] = library;
@@ -4435,7 +4447,8 @@ Future<String> _extractConstantCode(
     Expression expression,
     _ImportCollector importCollector,
     AssetId generatedLibraryId,
-    Resolver resolver) async {
+    Resolver resolver,
+    Map<LibraryElement, ResolvedLibraryResult> resolvedLibraries) async {
   String typeAnnotationHelper(TypeAnnotation typeName) {
     LibraryElement library = typeName.type.element.library;
     String prefix = importCollector._getPrefix(library);
@@ -4528,8 +4541,8 @@ Future<String> _extractConstantCode(
         return '';
       }
       LibraryElement libraryOfConstructor = expression.staticElement.library;
-      if (await _isImportableLibrary(
-          libraryOfConstructor, generatedLibraryId, resolver)) {
+      if (await _isImportableLibrary(libraryOfConstructor, generatedLibraryId,
+          resolver, resolvedLibraries)) {
         importCollector._addLibrary(libraryOfConstructor);
         String prefix = importCollector._getPrefix(libraryOfConstructor);
         // TODO(sigurdm) implement: Named arguments.
@@ -4555,8 +4568,7 @@ Future<String> _extractConstantCode(
         Element staticElement = expression.staticElement;
         if (staticElement is PropertyAccessorElement) {
           VariableElement variable = staticElement.variable;
-          var resolvedLibrary = await variable.session
-              .getResolvedLibraryByElement(variable.library);
+          var resolvedLibrary = resolvedLibraries[variable.library];
           var declaration = resolvedLibrary.getElementDeclaration(variable);
           if (declaration == null || declaration.node == null) {
             await _severe('Cannot handle private identifier $expression');
@@ -4579,7 +4591,7 @@ Future<String> _extractConstantCode(
         } else if (element.library == null) {
           return '${element.name}';
         } else if (await _isImportableLibrary(
-            element.library, generatedLibraryId, resolver)) {
+            element.library, generatedLibraryId, resolver, resolvedLibraries)) {
           importCollector._addLibrary(element.library);
           String prefix = importCollector._getPrefix(element.library);
           Element enclosingElement = element.enclosingElement;
@@ -4624,8 +4636,8 @@ Future<String> _extractConstantCode(
       String b = await helper(arguments[1]);
       return 'identical($a, $b)';
     } else if (expression is NamedExpression) {
-      String value = await _extractConstantCode(
-          expression.expression, importCollector, generatedLibraryId, resolver);
+      String value = await _extractConstantCode(expression.expression,
+          importCollector, generatedLibraryId, resolver, resolvedLibraries);
       return '${expression.name} $value';
     } else {
       assert(expression is IntegerLiteral ||
@@ -4728,8 +4740,12 @@ NodeList<Annotation> _getOtherMetadata(
 /// Returns a String with the code used to build the metadata of [element].
 ///
 /// Also adds any neccessary imports to [importCollector].
-Future<String> _extractMetadataCode(Element element, Resolver resolver,
-    _ImportCollector importCollector, AssetId dataId) async {
+Future<String> _extractMetadataCode(
+    Element element,
+    Resolver resolver,
+    Map<LibraryElement, ResolvedLibraryResult> resolvedLibraries,
+    _ImportCollector importCollector,
+    AssetId dataId) async {
   if (element.metadata == null) return 'const []';
 
   // Synthetic accessors do not have metadata. Only their associated fields.
@@ -4747,8 +4763,7 @@ Future<String> _extractMetadataCode(Element element, Resolver resolver,
   }
 
   NodeList<Annotation> metadata;
-  var resolvedLibrary =
-      await element.session.getResolvedLibraryByElement(element.library);
+  var resolvedLibrary = resolvedLibraries[element.library];
   if (element is LibraryElement) {
     metadata = _getLibraryMetadata(resolvedLibrary);
   } else {
@@ -4769,7 +4784,8 @@ Future<String> _extractMetadataCode(Element element, Resolver resolver,
       continue;
     }
 
-    if (!await _isImportable(annotationNode.element, dataId, resolver)) {
+    if (!await _isImportable(
+        annotationNode.element, dataId, resolver, resolvedLibraries)) {
       // Private constants, and constants made of classes in internal libraries
       // cannot be represented.
       // Skip them.
@@ -4788,7 +4804,7 @@ Future<String> _extractMetadataCode(Element element, Resolver resolver,
       List<String> argumentList = [];
       for (Expression argument in annotationNode.arguments.arguments) {
         argumentList.add(await _extractConstantCode(
-            argument, importCollector, dataId, resolver));
+            argument, importCollector, dataId, resolver, resolvedLibraries));
       }
       String arguments = argumentList.join(', ');
       if (_isPrivateName(name)) {
@@ -5107,15 +5123,22 @@ _ClassDomain _createClassDomain(ClassElement type, _ReflectorDomain domain) {
 // TODO(sigurdm) implement: Make a test that tries to reflect on native/private
 // classes.
 Future<bool> _isImportable(
-    Element element, AssetId generatedLibraryId, Resolver resolver) async {
+    Element element,
+    AssetId generatedLibraryId,
+    Resolver resolver,
+    Map<LibraryElement, ResolvedLibraryResult> resolvedLibraries) async {
   return await _isImportableLibrary(
-      element.library, generatedLibraryId, resolver);
+      element.library, generatedLibraryId, resolver, resolvedLibraries);
 }
 
 /// Answers true iff [library] can be imported into [generatedLibraryId].
-Future<bool> _isImportableLibrary(LibraryElement library,
-    AssetId generatedLibraryId, Resolver resolver) async {
-  Uri importUri = await _getImportUri(library, generatedLibraryId);
+Future<bool> _isImportableLibrary(
+    LibraryElement library,
+    AssetId generatedLibraryId,
+    Resolver resolver,
+    Map<LibraryElement, ResolvedLibraryResult> resolvedLibraries) async {
+  Uri importUri =
+      await _getImportUri(library, generatedLibraryId, resolvedLibraries);
   return importUri.scheme != 'dart' || sdkLibraryNames.contains(importUri.path);
 }
 
@@ -5124,13 +5147,17 @@ Future<bool> _isImportableLibrary(LibraryElement library,
 /// [assetId]. Note that [assetId] may represent a non-importable file such as
 /// a part.
 Future<String> _assetIdToUri(
-    AssetId assetId, AssetId from, Element messageTarget) async {
+    AssetId assetId,
+    AssetId from,
+    Element messageTarget,
+    Map<LibraryElement, ResolvedLibraryResult> resolvedLibraries) async {
   if (!assetId.path.startsWith('lib/')) {
     // Cannot do absolute imports of non lib-based assets.
     if (assetId.package != from.package) {
       await _severe(await _formatDiagnosticMessage(
           'Attempt to generate non-lib import from different package',
-          messageTarget));
+          messageTarget,
+          resolvedLibraries));
       return null;
     }
     return Uri(
@@ -5143,7 +5170,8 @@ Future<String> _assetIdToUri(
       .toString();
 }
 
-Future<Uri> _getImportUri(LibraryElement lib, AssetId from) async {
+Future<Uri> _getImportUri(LibraryElement lib, AssetId from,
+    Map<LibraryElement, ResolvedLibraryResult> resolvedLibraries) async {
   var source = lib.source;
   var uri = source.uri;
   if (uri.scheme == 'asset') {
@@ -5153,7 +5181,9 @@ Future<Uri> _getImportUri(LibraryElement lib, AssetId from) async {
     // For instance `asset:reflectable/example/example_lib.dart`.
     String package = uri.pathSegments[0];
     String path = uri.path.substring(package.length + 1);
-    return Uri(path: await _assetIdToUri(AssetId(package, path), from, lib));
+    return Uri(
+        path: await _assetIdToUri(
+            AssetId(package, path), from, lib, resolvedLibraries));
   }
   if (source is FileSource || source is InSummarySource) {
     return uri;
@@ -5376,9 +5406,12 @@ bool _isPlatformLibrary(LibraryElement libraryElement) =>
 
 /// Adds a severe error to the log, using the source code location of `target`
 /// to identify the relevant location where the error occurs.
-Future<void> _severe(String message, [Element target]) async {
+Future<void> _severe(String message,
+    [Element target,
+    Map<LibraryElement, ResolvedLibraryResult> resolvedLibraries]) async {
   if (target != null) {
-    log.severe(await _formatDiagnosticMessage(message, target));
+    log.severe(
+        await _formatDiagnosticMessage(message, target, resolvedLibraries));
   } else {
     log.severe(message);
   }
@@ -5386,9 +5419,12 @@ Future<void> _severe(String message, [Element target]) async {
 
 /// Adds a 'fine' message to the log, using the source code location of `target`
 /// to identify the relevant location where the issue occurs.
-Future<void> _fine(String message, [Element target]) async {
+Future<void> _fine(String message,
+    [Element target,
+    Map<LibraryElement, ResolvedLibraryResult> resolvedLibraries]) async {
   if (target != null) {
-    log.fine(await _formatDiagnosticMessage(message, target));
+    log.fine(
+        await _formatDiagnosticMessage(message, target, resolvedLibraries));
   } else {
     log.fine(message);
   }
@@ -5396,7 +5432,8 @@ Future<void> _fine(String message, [Element target]) async {
 
 /// Returns a string containing the given [message] and identifying the
 /// associated source code location as the location of the given [target].
-Future<String> _formatDiagnosticMessage(String message, Element target) async {
+Future<String> _formatDiagnosticMessage(String message, Element target,
+    Map<LibraryElement, ResolvedLibraryResult> resolvedLibraries) async {
   Source source = target?.source;
   if (source == null) return message;
   String locationString = '';
@@ -5404,8 +5441,7 @@ Future<String> _formatDiagnosticMessage(String message, Element target) async {
   // TODO(eernst): 'dart:*' is not considered valid. To survive, we return
   // a message with no location info when `element` is from 'dart:*'. Issue 173.
   if (nameOffset != null && !_isPlatformLibrary(target.library)) {
-    final resolvedLibrary =
-        await target.session.getResolvedLibraryByElement(target.library);
+    final resolvedLibrary = resolvedLibraries[target.library];
     final targetDeclaration = resolvedLibrary.getElementDeclaration(target);
     final unit = targetDeclaration.resolvedUnit.unit;
     final location = unit.lineInfo?.getLocation(nameOffset);
@@ -5420,9 +5456,11 @@ Future<String> _formatDiagnosticMessage(String message, Element target) async {
 // (as opposed to stdout and stderr which are swallowed). If given, [target]
 // is used to indicate a source code location.
 // ignore:unused_element
-Future<void> _emitMessage(String message, [Element target]) async {
+Future<void> _emitMessage(String message,
+    [Element target,
+    Map<LibraryElement, ResolvedLibraryResult> resolvedLibraries]) async {
   var formattedMessage = target != null
-      ? await _formatDiagnosticMessage(message, target)
+      ? await _formatDiagnosticMessage(message, target, resolvedLibraries)
       : message;
   log.warning(formattedMessage);
 }

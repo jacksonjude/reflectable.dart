@@ -1226,7 +1226,7 @@ class _ReflectorDomain {
                   typedefs));
             } else {
               // TODO(eernst) clarify: Are `dynamic` et al `InterfaceType`s?
-              // Otherwise this means "a case that we have not it considered".
+              // Otherwise this means "a case that we have not considered".
               await _severe(
                   '`reflectedTypeArguments` where one actual type argument'
                   ' is $actualTypeArgument');
